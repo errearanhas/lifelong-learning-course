@@ -6,6 +6,6 @@ Repository to store my stuff from Lifelong Learning course (offered by Electrica
 Training types, continual training, catastrophic forgetting, continual learning models.
 
 **Main reference:**
-_[Lifelong Machine Learning](https://www.amazon.com.br/Lifelong-Machine-Learning-Zhiyuan-Chen/dp/1681733021), Second Edition,
+_[Lifelong Machine Learning](https://www.amazon.com/Lifelong-Machine-Learning-Zhiyuan-Chen-ebook/dp/B07H515RQS), Second Edition,
 Zhiyuan Chen and Bing Liu
 Morgan & Claypool 2018_
