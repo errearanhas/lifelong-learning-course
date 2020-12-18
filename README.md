@@ -10,11 +10,11 @@ _[Lifelong Machine Learning](https://www.amazon.com/Lifelong-Machine-Learning-Zh
 Zhiyuan Chen and Bing Liu
 Morgan & Claypool 2018_
 
-**Material presented:**
+**Topics presented:**
 
 * Chapter 4 of _[main reference](https://www.amazon.com/Lifelong-Machine-Learning-Zhiyuan-Chen-ebook/dp/B07H515RQS): Continual Learning and
 Catastrophic Forgetting_
 
-* Paper [_Continual lifelong learning with neural networks: A review_](https://www.sciencedirect.com/science/article/pii/S0893608019300231) (German Parisi et al., 2019)
+* Paper [_Continual lifelong learning with neural networks: A review_](https://www.sciencedirect.com/science/article/pii/S0893608019300231) (Parisi et al., 2019)
 
 * Paper [_Continuous learning in single-incremental-task scenarios_](https://www.sciencedirect.com/science/article/abs/pii/S0893608019300838) (Maltoni & Lomonaco, 2019)
