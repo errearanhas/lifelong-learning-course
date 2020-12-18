@@ -12,7 +12,7 @@ Morgan & Claypool 2018_
 
 **Topics presented:**
 
-* Chapter 4 of _[main reference](https://www.amazon.com/Lifelong-Machine-Learning-Zhiyuan-Chen-ebook/dp/B07H515RQS): Continual Learning and
+* Chapter 4 of _[Lifelong Machine Learning](https://www.amazon.com/Lifelong-Machine-Learning-Zhiyuan-Chen-ebook/dp/B07H515RQS): Continual Learning and
 Catastrophic Forgetting_
 
 * Paper [_Continual lifelong learning with neural networks: A review_](https://www.sciencedirect.com/science/article/pii/S0893608019300231) (Parisi et al., 2019)
