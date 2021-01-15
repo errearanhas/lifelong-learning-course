@@ -557,6 +557,41 @@ testX, testY = task2[2], task2[3]
 (loss, acc) = modelo21.evaluate(testX, testY, batch_size=1)
 print("[INFO] task2 test accuracy: {:.4f}".format(acc))
 
+# ===============================================
+# function to plot metrics evolution over epochs
+# ===============================================
+
+def plot_curves(epochs, metric, ref_dict):
+  val_metric = f"val_{metric}"
+
+  means_acc = []
+  stds_acc = []
+  means_val_acc = []
+  stds_val_acc = []
+
+  for i in range(epochs):
+    means_acc.append(np.mean(ref_dict[f"epoch_{i}"][metric]))
+    stds_acc.append(np.std(ref_dict[f"epoch_{i}"][metric]))
+    means_val_acc.append(np.mean(ref_dict[f"epoch_{i}"][val_metric]))
+    stds_val_acc.append(np.std(ref_dict[f"epoch_{i}"][val_metric]))
+
+  fig, ax = plt.subplots(figsize=(13, 6))
+
+  ax.plot(range(1, epochs+1), means_acc, "-", label=metric)
+  ax.set_xticks(range(1, epochs+1))
+  ax.fill_between(range(1, epochs+1),
+                  [i - j for i, j in zip(means_acc, stds_acc)],
+                  [i + j for i, j in zip(means_acc, stds_acc)],
+                  alpha=0.3)
+  ax.legend()
+
+  ax.plot(range(1, epochs+1), means_val_acc, "-", label=val_metric)
+  ax.fill_between(range(1, epochs+1),
+                  [i - j for i, j in zip(means_val_acc, stds_val_acc)],
+                  [i + j for i, j in zip(means_val_acc, stds_val_acc)],
+                  alpha=0.3)
+  ax.legend()
+
 # ====================================================================
 # setting cross validation scheme (using EWC model from custom class)
 # ====================================================================
@@ -627,18 +662,23 @@ for i in range(0, epochs):
       task1_ewc.update({"epoch_{}".format(i):{'acc':[]}})
       task1_ewc["epoch_{}".format(i)].update({'rec':[]})
       task1_ewc["epoch_{}".format(i)].update({'prec':[]})
-
+      task1_ewc["epoch_{}".format(i)].update({'loss':[]})
+      
       task2_ewc.update({"epoch_{}".format(i):{'acc':[]}})
       task2_ewc["epoch_{}".format(i)].update({'rec':[]})
       task2_ewc["epoch_{}".format(i)].update({'prec':[]})
-      
+      task2_ewc["epoch_{}".format(i)].update({'loss':[]})
+
       task1_ewc12.update({"epoch_{}".format(i):{'acc':[]}})
       task1_ewc12["epoch_{}".format(i)].update({'rec':[]})
       task1_ewc12["epoch_{}".format(i)].update({'prec':[]})
+      task1_ewc12["epoch_{}".format(i)].update({'loss':[]})
 
       task2_ewc12.update({"epoch_{}".format(i):{'acc':[]}})
       task2_ewc12["epoch_{}".format(i)].update({'rec':[]})
       task2_ewc12["epoch_{}".format(i)].update({'prec':[]})
+      task2_ewc12["epoch_{}".format(i)].update({'loss':[]})
+
 
 for k, (train, val) in enumerate(k_fold.split(X, Y)):
     print("[fold {0}]".format(k))
@@ -709,39 +749,10 @@ for k, (train, val) in enumerate(k_fold.split(X, Y)):
       # task2_ewc12["epoch_{}".format(i)]['prec'].append(c)
       # task2_ewc12["epoch_{}".format(i)]['rec'].append(d)
 
-# ===============================================
-# function to plot metrics evolution over epochs
-# ===============================================
+'''
+train_metrics_dict: metrics of EWC model training (cross valid) on task 1 (ewc_lambda = 0)
+task1_ewc: metrics of EWC model testing (ewc_lambda = 0) on task 1 only
+task2_ewc: metrics of EWC model testing (ewc_lambda = 0) on task 2 only
+'''
 
-def plot_curves(epochs, metric, ref_dict):
-  val_metric = f"val_{metric}"
-
-  means_acc = []
-  stds_acc = []
-  means_val_acc = []
-  stds_val_acc = []
-
-  for i in range(epochs):
-    means_acc.append(np.mean(ref_dict[f"epoch_{i}"][metric]))
-    stds_acc.append(np.std(ref_dict[f"epoch_{i}"][metric]))
-    means_val_acc.append(np.mean(ref_dict[f"epoch_{i}"][val_metric]))
-    stds_val_acc.append(np.std(ref_dict[f"epoch_{i}"][val_metric]))
-
-  fig, ax = plt.subplots(figsize=(13, 6))
-
-  ax.plot(range(1, epochs+1), means_acc, "-", label=metric)
-  ax.set_xticks(range(1, epochs+1))
-  ax.fill_between(range(1, epochs+1),
-                  [i - j for i, j in zip(means_acc, stds_acc)],
-                  [i + j for i, j in zip(means_acc, stds_acc)],
-                  alpha=0.3)
-  ax.legend()
-
-  ax.plot(range(1, epochs+1), means_val_acc, "-", label=val_metric)
-  ax.fill_between(range(1, epochs+1),
-                  [i - j for i, j in zip(means_val_acc, stds_val_acc)],
-                  [i + j for i, j in zip(means_val_acc, stds_val_acc)],
-                  alpha=0.3)
-  ax.legend()
-
-plot_curves(20, "prec", train_metrics_dict)
+plot_curves(epochs=20, metric="prec", ref_dict=train_metrics_dict)
