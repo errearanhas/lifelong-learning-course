@@ -25,8 +25,9 @@ from tensorflow.keras.optimizers import Adam
 from tensorflow.keras.losses import binary_crossentropy
 from tensorflow.keras.applications import DenseNet121
 from tensorflow.keras.models import Model
-from sklearn.model_selection import train_test_split
+from keras.models import load_model
 from sklearn.model_selection import KFold
+from sklearn.model_selection import train_test_split, StratifiedKFold
 import matplotlib.pyplot as plt
 from imutils import paths
 import numpy as np
@@ -44,7 +45,7 @@ drive.mount('/content/drive', force_remount=True)
 # ===================
 
 def get_data(imPaths):
-  print("[INFO] loading images...")
+  print("loading images...")
   # grab the list of images in dataset directory
   imagePaths = list(paths.list_images(imPaths))
   data = []
@@ -64,7 +65,7 @@ def get_data(imPaths):
   # intensities to range [0, 1]
   d = np.array(data) / 255.0
   l = np.array(labels)
-  print("[INFO] ok")
+  print("ok")
   return d, l
 
 
@@ -78,24 +79,24 @@ def split(data, labels, test_size=0.20, stratify=0):
     (trainX, testX, trainY, testY) = train_test_split(X, y, test_size=test_size, random_state=42)
   return (trainX, testX, trainY, testY)
 
-# =========================================
-# defining tasks (Montgomery and Shenzhen)
-# =========================================
+# # =========================================
+# # defining tasks (Montgomery and Shenzhen)
+# # =========================================
 
-# load images
-data1, labels_1 = get_data('/content/drive/My Drive/Colab Notebooks/mont_CXR_png/')
-(train1X, test1X, train1Y, test1Y) = split(data1, labels_1, test_size=0.20)
+# # load images
+# data1, labels_1 = get_data('/content/drive/My Drive/Colab Notebooks/mont_CXR_png/')
+# (train1X, test1X, train1Y, test1Y) = split(data1, labels_1, test_size=0.20)
 
-data2, labels_2 = get_data('/content/drive/My Drive/Colab Notebooks/shen_CXR_png/')
-(train2X, test2X, train2Y, test2Y) = split(data2, labels_2, test_size=0.20)
+# data2, labels_2 = get_data('/content/drive/My Drive/Colab Notebooks/shen_CXR_png/')
+# (train2X, test2X, train2Y, test2Y) = split(data2, labels_2, test_size=0.20)
 
-# define tasks
-task1 = [train1X, train1Y, test1X, test1Y]
-task2 = [train2X, train2Y, test2X, test2Y]
+# # define tasks
+# task1 = [train1X, train1Y, test1X, test1Y]
+# task2 = [train2X, train2Y, test2X, test2Y]
 
-# save tasks to npy files
-np.save('/content/drive/My Drive/Colab Notebooks/task_montgomery.npy', task1)
-np.save('/content/drive/My Drive/Colab Notebooks/task_shenzhen.npy', task2)
+# # save tasks to npy files
+# np.save('/content/drive/My Drive/Colab Notebooks/task_montgomery.npy', task1)
+# np.save('/content/drive/My Drive/Colab Notebooks/task_shenzhen.npy', task2)
 
 # ========================================================
 # load already saved tasks data (Montgomery and Shenzhen)
@@ -127,7 +128,12 @@ print(train2X.shape)
 print(test2X.shape)
 
 # plot samples
-plt.imshow(data2[0])
+fig = plt.figure(figsize=(10, 8))
+for i in range(0, len(data2[:15])):
+    img = data2[i]
+    fig.add_subplot(3, 5, i+1)
+    plt.imshow(img)
+plt.show()
 
 # ======================================================================
 # create a new class (keras Model as superclass) to apply EWC loss term
@@ -183,29 +189,141 @@ class ModelEWC(Model):
 # ======================================================
 # ref: https://www.pyimagesearch.com/2020/03/16/detecting-covid-19-in-x-ray-images-with-keras-tensorflow-and-deep-learning/
 
-def build_model(nr_classes=1, shape=(224, 224, 3)):
-  # load the DenseNet network, ensuring the head FC layer sets are left off
-  base = DenseNet121(weights="imagenet", include_top=False, input_tensor=Input(shape=shape))
-  
-  # construct the head to be placed on top of the base model
-  head_FC = base.output
-  head_FC = MaxPooling2D(pool_size=(2, 2))(head_FC)
-  head_FC = Flatten(name="flatten")(head_FC)
-  head_FC = Dense(64, activation="relu")(head_FC)
-  head_FC = Dropout(0.5)(head_FC)
-  head_FC = Dense(nr_classes, activation="sigmoid")(head_FC)
-  
-  # place head FC model on top of base model
-  model = Model(inputs=base.input, outputs=head_FC)
+def build_model(nr_classes=1, shape=(224, 224, 3), freeze_cnn = True):
+   # load the DenseNet network, ensuring the head FC layer sets are left off
+   base = DenseNet121(weights="imagenet", include_top=False, input_tensor=Input(shape=shape))
+   # construct the head to be placed on top of the base model
+   head_FC = base.output
+   head_FC = MaxPooling2D(pool_size=(2, 2))(head_FC)
+   head_FC = Flatten(name="flatten")(head_FC)
+   head_FC = Dropout(0.6)(head_FC)
+   head_FC = Dense(64, activation="relu")(head_FC)
+   head_FC = Dropout(0.6)(head_FC)
+   head_FC = Dense(nr_classes, activation="sigmoid")(head_FC) 
 
-  # freeze parameters in base model
-  for layer in base.layers:
-    layer.trainable = False
-  return model
+   # place head FC model on top of base model
+   model = Model(inputs=base.input, outputs=head_FC)
+   
+   if freeze_cnn:
+     # freeze parameters in base model
+     for layer in base.layers:
+       layer.trainable = False
+   return model
 
-# ====================================
+# =========================================
+# get optimal weights for individual tasks
+# =========================================
+
+baseModel = None
+baseModel = build_model()
+metrics=["acc",
+         tf.keras.metrics.Precision(),
+         tf.keras.metrics.Recall()]
+
+EWC = ModelEWC(inputs=baseModel.input,
+                outputs=baseModel.output,
+                fisher_dict={},
+                optpar_dict={},
+                ewc_lambda=0)
+
+EWC.compile(optimizer="adam",
+            loss="binary_crossentropy",
+            metrics=metrics)
+
+train1X, test1X, train1Y, test1Y = train_test_split(data1, labels_1, test_size=0.20, shuffle=True, random_state=42)
+# train2X, test2X, train2Y, test2Y = train_test_split(data2, labels_2, test_size=0.20, shuffle=True, random_state=42)
+
+H = EWC.fit(x=train1X, y=train1Y, epochs=50, batch_size=16, validation_data=(test1X, test1Y))
+# H = EWC.fit(x=train2X, y=train2Y, epochs=50, batch_size=32, validation_data=(test2X, test2Y))
+
+import matplotlib.pyplot as plt
+import pandas as pd
+
+epochs = range(0, 50)
+fig, axes = plt.subplots(2, 2, figsize=(15,8))
+n=6
+
+metric = ['acc', 'loss', f'precision_{n}', f'recall_{n}']
+val_metric = [f"val_{i}" for i in metric]
+
+# Plotting the training and validation loss
+loss_values = H.history[metric[1]]
+val_loss_values = H.history[val_metric[1]]
+
+# # Plotting the training and validation loss
+# loss_values = hhist[metric[1]]
+# val_loss_values = hhist[val_metric[1]]
+
+axes[0,0].plot(epochs, loss_values, 'b', label='Training loss')
+axes[0,0].plot(epochs, val_loss_values, 'r', label='Validation loss')
+axes[0,0].legend()
+
+# Plotting the training and validation accuracy
+acc_values = H.history[metric[0]]
+val_acc_values = H.history[val_metric[0]]
+
+# # Plotting the training and validation accuracy
+# acc_values = hhist[metric[0]]
+# val_acc_values = hhist[val_metric[0]]
+
+axes[0,1].plot(epochs, acc_values, 'b', label='Training acc')
+axes[0,1].plot(epochs, val_acc_values, 'r', label='Validation acc')
+axes[0,1].legend()
+
+acc_values = H.history[metric[2]]
+val_acc_values = H.history[val_metric[2]]
+
+# acc_values = hhist[metric[2]]
+# val_acc_values = hhist[val_metric[2]]
+
+axes[1,1].plot(epochs, acc_values, 'b', label='Training prec')
+axes[1,1].plot(epochs, val_acc_values, 'r', label='Validation prec')
+axes[1,1].legend()
+
+acc_values = H.history[metric[3]]
+val_acc_values = H.history[val_metric[3]]
+
+# acc_values = hhist[metric[3]]
+# val_acc_values = hhist[val_metric[3]]
+
+
+axes[1,0].plot(epochs, acc_values, 'b', label='Training recall')
+axes[1,0].plot(epochs, val_acc_values, 'r', label='Validation recall')
+axes[1,0].legend()
+
+# # saving task only history and model
+# f = open("/content/drive/My Drive/Colab Notebooks/task2_only_history.pkl", "wb")
+# pickle.dump(H.history, f)
+# f.close()
+
+# EWC.save("/content/drive/My Drive/Colab Notebooks/model2_only.tf")
+# EWC = load_model("/content/drive/My Drive/Colab Notebooks/model2_only.tf")
+
+# # load history
+# f = open("/content/drive/My Drive/Colab Notebooks/task1_only_history.pkl", "rb")
+# hhist = pickle.load(f)
+
+# classification report, task 1
+from sklearn.metrics import classification_report
+
+preds = [1 if i > 0.5 else 0 for i in EWC.predict(data1)]
+print(classification_report(labels_1, preds))
+
+# classification report, task 2
+from sklearn.metrics import classification_report
+
+preds = [1 if i > 0.5 else 0 for i in EWC.predict(test2X)]
+print(classification_report(test2Y, preds))
+
+# classification report, task 2
+from sklearn.metrics import classification_report
+
+preds = [1 if i > 0.5 else 0 for i in EWC.predict(data2)]
+print(classification_report(labels_2, preds))
+
+# ===================================
 # defining custom training functions
-# ====================================
+# ===================================
 
 def on_task_update(task, model, BS):
   loss_history = []
@@ -253,10 +371,10 @@ def train_normal(task, model, BS, EPOCHS):
     print("[INFO] epoch {}/{} ".format(epoch + 1, EPOCHS), end="")
     sys.stdout.flush()
     epochStart = time.time()
-
+   
     # loop over data in batch size increments, and take grads, params and model
-    fisher_dict, optpar_dict, modl, epoch_loss = on_task_update(task, model, BS)
-    model = modl
+    fisher_dict, optpar_dict, M, epoch_loss = on_task_update(task, model, BS)
+    model = M
 
     epoch_loss_history.append(epoch_loss)
 
@@ -356,65 +474,65 @@ def sum_list_of_tensors(grads_accum):
     
     return res
 
-# =============================
-# set training hyperparameters
-# =============================
+# # =============================
+# # set training hyperparameters
+# # =============================
 
-# number of epochs, batch size and learning rate
-EPOCHS = 30
-BS = 32
-LR = 1e-3
+# # number of epochs, batch size and learning rate
+# EPOCHS = 30
+# BS = 32
+# LR = 1e-3
 
-# build model and initialize optimizer
-modl1 = build_model()
-modl2 = build_model()
+# # build model and initialize optimizer
+# M1 = build_model()
+# M2 = build_model()
 
-modl1.compile(optimizer=Adam(lr=LR, decay=LR / EPOCHS),
-              loss="binary_crossentropy",
-              metrics="accuracy")
+# M1.compile(optimizer=Adam(lr=LR, decay=LR / EPOCHS),
+#               loss="binary_crossentropy",
+#               metrics="accuracy")
 
-modl2.compile(optimizer=Adam(lr=LR, decay=LR / EPOCHS),
-              loss="binary_crossentropy",
-              metrics="accuracy")
+# M2.compile(optimizer=Adam(lr=LR, decay=LR / EPOCHS),
+#               loss="binary_crossentropy",
+#               metrics="accuracy")
 
-# ====================================================================
-# calculate fisher information and optimized parameters for each task
-# ====================================================================
+# # ====================================================================
+# # calculate fisher information and optimized parameters for each task
+# # ====================================================================
 
-fisher_dict1, optpar_dict1, model1, loss_history1 = train_normal(task1, modl1, BS, EPOCHS)
-fisher_dict2, optpar_dict2, model2, loss_history2 = train_normal(task2, modl2, BS, 32)
+# fisher_dict1, optpar_dict1, model1, loss_history1 = train_normal(task1, M1, BS, EPOCHS)
+# fisher_dict2, optpar_dict2, model2, loss_history2 = train_normal(task2, M2, 16, EPOCHS)
 
-# ============================================
-# save dicts, model and loss history to files
-# ============================================
+# # ============================================
+# # save dicts, model and loss history to files
+# # ============================================
 
-#  saving dicts
-f = open("/content/drive/My Drive/Colab Notebooks/fisher_dict1.pkl", "wb")
-pickle.dump(fisher_dict1, f)
-f.close()
+# #  saving dicts
+# f = open("/content/drive/My Drive/Colab Notebooks/fisher_dict1.pkl", "wb")
+# pickle.dump(fisher_dict1, f)
+# f.close()
 
-f = open("/content/drive/My Drive/Colab Notebooks/fisher_dict2.pkl", "wb")
-pickle.dump(fisher_dict1, f)
-f.close()
+# f = open("/content/drive/My Drive/Colab Notebooks/fisher_dict2.pkl", "wb")
+# pickle.dump(fisher_dict2, f)
+# f.close()
 
-f = open("/content/drive/My Drive/Colab Notebooks/optpar_dict1.pkl", "wb")
-pickle.dump(fisher_dict1, f)
-f.close()
+# f = open("/content/drive/My Drive/Colab Notebooks/optpar_dict1.pkl", "wb")
+# pickle.dump(optpar_dict1, f)
+# f.close()
 
-f = open("/content/drive/My Drive/Colab Notebooks/optpar_dict2.pkl", "wb")
-pickle.dump(fisher_dict1, f)
-f.close()
+# f = open("/content/drive/My Drive/Colab Notebooks/optpar_dict2.pkl", "wb")
+# pickle.dump(optpar_dict2, f)
+# f.close()
 
-# saving models
-model1.save('/content/drive/My Drive/Colab Notebooks/model1')
-model2.save('/content/drive/My Drive/Colab Notebooks/model2')
+# # saving models
+# model1.save('/content/drive/My Drive/Colab Notebooks/model1.h5')
+# model2.save('/content/drive/My Drive/Colab Notebooks/model2.h5')
 
-# saving loss history
-with open("/content/drive/My Drive/Colab Notebooks/loss_history1.pkl", "wb") as f:
-  pickle.dump(loss_history1, f)
+# # saving loss history
+# with open("/content/drive/My Drive/Colab Notebooks/loss_history1.pkl", "wb") as f:
+#   pickle.dump(loss_history1, f)
 
-with open("/content/drive/My Drive/Colab Notebooks/loss_history2.pkl", "wb") as f:
-  pickle.dump(loss_history2, f)
+# with open("/content/drive/My Drive/Colab Notebooks/loss_history2.pkl", "wb") as f:
+#   pickle.dump(loss_history2, f)
 
 # ==================================================
 # load saved files of dicts, model and loss history
@@ -435,8 +553,8 @@ f = open("/content/drive/My Drive/Colab Notebooks/optpar_dict2.pkl", "rb")
 optpar_dict2 = pickle.load(f)
 
 # load models
-# model1 = tf.keras.models.load_model('/content/drive/My Drive/Colab Notebooks/model1')
-# model2 = tf.keras.models.load_model('/content/drive/My Drive/Colab Notebooks/model2')
+# model1 = load_model('/content/drive/My Drive/Colab Notebooks/model1.h5')
+# model2 = load_model('/content/drive/My Drive/Colab Notebooks/model2.h5')
 
 # # load loss history
 # with open("/content/drive/My Drive/Colab Notebooks/loss_history1.pkl", "rb") as f:
@@ -445,125 +563,125 @@ optpar_dict2 = pickle.load(f)
 # with open("/content/drive/My Drive/Colab Notebooks/loss_history2.pkl", "rb") as f:
 #   loss_history2 = pickle.load(f)
 
-# ========================================
-# plotting training loss history of task1
-# ========================================
+# # ========================================
+# # plotting training loss history of task1
+# # ========================================
 
-loss_data = loss_history1
+# loss_data = loss_history1
 
-plt.clf()
-plt.plot(range(0, len(loss_data)), loss_data, '-', label='Training loss')
-plt.title('Train loss')
-plt.xlabel('Epochs')
-plt.ylabel('Loss')
-plt.legend()
-plt.show()
+# plt.clf()
+# plt.plot(range(0, len(loss_data)), loss_data, '-', label='Training loss')
+# plt.title('Train loss')
+# plt.xlabel('Epochs')
+# plt.ylabel('Loss')
+# plt.legend()
+# plt.show()
 
-# ==================================
-# evaluate blind model on test data
-# ==================================
+# # ==================================
+# # evaluate blind model on test data
+# # ==================================
 
-ml = build_model()
+# ml = build_model()
 
-# in order to calculate accuracy using Keras' functions we first need to compile the model
-ml.compile(metrics=["acc"])
-# now that the model is compiled we can compute the accuracy
+# # in order to calculate accuracy using Keras' functions we first need to compile the model
+# ml.compile(metrics=["acc"])
+# # now that the model is compiled we can compute the accuracy
 
-testX, testY = task1[0], task1[1]
-(loss, acc) = ml.evaluate(testX, testY, batch_size=1)
-print("[INFO] task1 test accuracy: {:.4f}".format(acc))
+# testX, testY = task1[0], task1[1]
+# (loss, acc) = ml.evaluate(testX, testY, batch_size=1)
+# print("[INFO] task1 test accuracy: {:.4f}".format(acc))
 
-testX, testY = task2[0], task2[1]
-(loss, acc) = ml.evaluate(testX, testY, batch_size=1)
-print("[INFO] task2 test accuracy: {:.4f}".format(acc))
+# testX, testY = task2[0], task2[1]
+# (loss, acc) = ml.evaluate(testX, testY, batch_size=1)
+# print("[INFO] task2 test accuracy: {:.4f}".format(acc))
 
-# ==============================
-# evaluate model 1 on test data
-# ==============================
+# # ==============================
+# # evaluate model 1 on test data
+# # ==============================
 
-# in order to calculate accuracy using Keras' functions we first need to compile the model
-model1.compile(metrics=["acc"])
-# now that the model is compiled we can compute the accuracy
+# # in order to calculate accuracy using Keras' functions we first need to compile the model
+# model1.compile(metrics=["acc"])
+# # now that the model is compiled we can compute the accuracy
 
-testX, testY = task1[0], task1[1]
-(loss, acc) = model1.evaluate(testX, testY, batch_size=1)
-print("[INFO] task1 test accuracy: {:.4f}".format(acc))
+# testX, testY = task1[0], task1[1]
+# (loss, acc) = model1.evaluate(testX, testY, batch_size=1)
+# print("[INFO] task1 test accuracy: {:.4f}".format(acc))
 
-testX, testY = task2[0], task2[1]
-(loss, acc) = model1.evaluate(testX, testY, batch_size=1)
-print("[INFO] task2 test accuracy: {:.4f}".format(acc))
+# testX, testY = task2[0], task2[1]
+# (loss, acc) = model1.evaluate(testX, testY, batch_size=1)
+# print("[INFO] task2 test accuracy: {:.4f}".format(acc))
 
-# ==============================
-# evaluate model 2 on test data
-# ==============================
+# # ==============================
+# # evaluate model 2 on test data
+# # ==============================
 
-# in order to calculate accuracy using Keras' functions we first need to compile the model
-model2.compile(metrics=["acc"])
-# now that the model is compiled we can compute the accuracy
+# # in order to calculate accuracy using Keras' functions we first need to compile the model
+# model2.compile(metrics=["acc"])
+# # now that the model is compiled we can compute the accuracy
 
-testX, testY = task1[0], task1[1]
-(loss, acc) = model2.evaluate(testX, testY, batch_size=1)
-print("[INFO] task1 test accuracy: {:.4f}".format(acc))
+# testX, testY = task1[0], task1[1]
+# (loss, acc) = model2.evaluate(testX, testY, batch_size=1)
+# print("[INFO] task1 test accuracy: {:.4f}".format(acc))
 
-testX, testY = task2[0], task2[1]
-(loss, acc) = model2.evaluate(testX, testY, batch_size=1)
-print("[INFO] task2 test accuracy: {:.4f}".format(acc))
+# testX, testY = task2[0], task2[1]
+# (loss, acc) = model2.evaluate(testX, testY, batch_size=1)
+# print("[INFO] task2 test accuracy: {:.4f}".format(acc))
 
-# ====================================
-# train EWC model (task 1 --> task 2)
-# ====================================
+# # ====================================
+# # train EWC model (task 1 --> task 2)
+# # ====================================
 
-BS=16
-EPOCHS=30
-modelo12, loss_historico = train_ewc(task2, model1, BS, EPOCHS, fisher_dict1, optpar_dict1, ewc_lambd=0.7)
+# BS=16
+# EPOCHS=30
+# modelo12, loss_historico = train_ewc(task2, model1, BS, EPOCHS, fisher_dict1, optpar_dict1, ewc_lambd=0.7)
 
-# ====================================
-# train EWC model (task 2 --> task 1)
-# ====================================
+# # ====================================
+# # train EWC model (task 2 --> task 1)
+# # ====================================
 
-BS=16
-EPOCHS=30
-modelo21, loss_historico = train_ewc(task1, model2, BS, EPOCHS, fisher_dict2, optpar_dict2, ewc_lambd=0.3)
+# BS=16
+# EPOCHS=30
+# modelo21, loss_historico = train_ewc(task1, model2, BS, EPOCHS, fisher_dict2, optpar_dict2, ewc_lambd=0.3)
 
-# ===================================================
-# evaluate EWC model (task 1 --> task2) on test data
-# ===================================================
+# # ===================================================
+# # evaluate EWC model (task 1 --> task2) on test data
+# # ===================================================
 
-# in order to calculate accuracy using Keras' functions we first need to compile the model
-modelo12.compile(metrics=["acc"])
-# now that the model is compiled we can compute the accuracy
+# # in order to calculate accuracy using Keras' functions we first need to compile the model
+# modelo12.compile(metrics=["acc"])
+# # now that the model is compiled we can compute the accuracy
 
-testX, testY = task1[0], task1[1]
-(loss, acc) = modelo12.evaluate(testX, testY, batch_size=1)
-print("[INFO] task1 test accuracy: {:.4f}".format(acc))
+# testX, testY = task1[0], task1[1]
+# (loss, acc) = modelo12.evaluate(testX, testY, batch_size=1)
+# print("[INFO] task1 test accuracy: {:.4f}".format(acc))
 
-testX, testY = task2[0], task2[1]
-(loss, acc) = modelo12.evaluate(testX, testY, batch_size=1)
-print("[INFO] task2 test accuracy: {:.4f}".format(acc))
+# testX, testY = task2[0], task2[1]
+# (loss, acc) = modelo12.evaluate(testX, testY, batch_size=1)
+# print("[INFO] task2 test accuracy: {:.4f}".format(acc))
 
-# ===================================================
-# evaluate EWC model (task 2 --> task1) on test data
-# ===================================================
+# # ===================================================
+# # evaluate EWC model (task 2 --> task1) on test data
+# # ===================================================
 
-# in order to calculate accuracy using Keras' functions we first need to compile the model
-modelo21.compile(metrics=["acc"])
-# now that the model is compiled we can compute the accuracy
+# # in order to calculate accuracy using Keras' functions we first need to compile the model
+# modelo21.compile(metrics=["acc"])
+# # now that the model is compiled we can compute the accuracy
 
-testX, testY = task1[2], task1[3]
-(loss, acc) = modelo21.evaluate(testX, testY, batch_size=1)
-print("[INFO] task1 test accuracy: {:.4f}".format(acc))
+# testX, testY = task1[2], task1[3]
+# (loss, acc) = modelo21.evaluate(testX, testY, batch_size=1)
+# print("[INFO] task1 test accuracy: {:.4f}".format(acc))
 
-testX, testY = task2[2], task2[3]
-(loss, acc) = modelo21.evaluate(testX, testY, batch_size=1)
-print("[INFO] task2 test accuracy: {:.4f}".format(acc))
+# testX, testY = task2[2], task2[3]
+# (loss, acc) = modelo21.evaluate(testX, testY, batch_size=1)
+# print("[INFO] task2 test accuracy: {:.4f}".format(acc))
 
-# ===============================================
-# function to plot metrics evolution over epochs
-# ===============================================
+# =====================================================
+# function to plot train metrics evolution over epochs
+# =====================================================
 
-def plot_curves(epochs, metric, ref_dict):
+def plot_training(epochs, metric, ref_dict):
   val_metric = f"val_{metric}"
-
+  
   means_acc = []
   stds_acc = []
   means_val_acc = []
@@ -579,18 +697,83 @@ def plot_curves(epochs, metric, ref_dict):
 
   ax.plot(range(1, epochs+1), means_acc, "-", label=metric)
   ax.set_xticks(range(1, epochs+1))
+  ax.text(20, means_acc[19], round(means_acc[19],2))
+  ax.grid(True, alpha=0.5)
+  
+  if metric != 'loss':
+    ax.set_ylim(0,1)
+    
   ax.fill_between(range(1, epochs+1),
                   [i - j for i, j in zip(means_acc, stds_acc)],
                   [i + j for i, j in zip(means_acc, stds_acc)],
                   alpha=0.3)
-  ax.legend()
+  ax.legend(loc='upper center')
 
   ax.plot(range(1, epochs+1), means_val_acc, "-", label=val_metric)
+  ax.text(20, means_val_acc[19], round(means_val_acc[19],2))
+  ax.grid(True, alpha=0.5)
   ax.fill_between(range(1, epochs+1),
                   [i - j for i, j in zip(means_val_acc, stds_val_acc)],
                   [i + j for i, j in zip(means_val_acc, stds_val_acc)],
                   alpha=0.3)
-  ax.legend()
+  ax.legend(loc='upper center')
+
+
+# ====================================================
+# function to plot tasks model performance over epochs
+# ====================================================
+
+def plot_performance(epochs, metric, ref_dict1, ref_dict2):
+  means_acc = []
+  stds_acc = []
+  means_val_acc = []
+  stds_val_acc = []
+
+  for i in range(epochs):
+    means_acc.append(np.mean(ref_dict1[f"epoch_{i}"][metric]))
+    stds_acc.append(np.std(ref_dict1[f"epoch_{i}"][metric]))
+    means_val_acc.append(np.mean(ref_dict2[f"epoch_{i}"][metric]))
+    stds_val_acc.append(np.std(ref_dict2[f"epoch_{i}"][metric]))
+
+  fig, ax = plt.subplots(figsize=(13, 6))
+
+  ax.plot(range(1, epochs+1), means_acc, "-", label=f"task 1 {metric}")
+  ax.set_xticks(range(1, epochs+1))
+  ax.text(20, means_acc[19], round(means_acc[19],2))
+  ax.grid(True, alpha=0.5)
+  
+  if metric != 'loss':
+    ax.set_ylim(0,1)
+
+  ax.fill_between(range(1, epochs+1),
+                  [i - j for i, j in zip(means_acc, stds_acc)],
+                  [i + j for i, j in zip(means_acc, stds_acc)],
+                  alpha=0.3)
+  ax.legend(loc='upper center')
+
+  ax.plot(range(1, epochs+1), means_val_acc, "-", label=f"task 2 {metric}")
+  ax.text(20, means_val_acc[19], round(means_val_acc[19],2))
+  ax.grid(True, alpha=0.5)
+  ax.fill_between(range(1, epochs+1),
+                  [i - j for i, j in zip(means_val_acc, stds_val_acc)],
+                  [i + j for i, j in zip(means_val_acc, stds_val_acc)],
+                  alpha=0.3)
+  ax.legend(loc='upper center')
+
+# ===========================================================================
+# piece of code showing how to manually set model weights from another model
+# ===========================================================================
+
+# sample model
+# model = Sequential()
+# model.add(Dense(10, activation='relu', input_shape=(10,)))
+# model.add(Dense(1, activation='sigmoid'))
+# model.compile(optimizer='adam', loss='categorical_crossentropy')
+
+# # a = np.array(model.get_weights())         # save weights in a np.array of np.arrays
+# model.set_weights(a + 1)                  # add 1 to all weights in the neural network
+# b = np.array(model.get_weights())         # save weights a second time in a np.array of np.arrays
+# print(b - a)                          # print changes in weights
 
 # ====================================================================
 # setting cross validation scheme (using EWC model from custom class)
@@ -598,21 +781,17 @@ def plot_curves(epochs, metric, ref_dict):
 
 # for train, test in kfold.split(X,Y):
 # 	print('train: %s, test: %s' % (X[train].shape, X[test].shape))
- 
+
 X = data1
 Y = labels_1
 splits = 5
 epochs = 20
 batchSize = 16
+ewc_lambda = 10
 
 train_metrics_dict = {}
-train_metrics2_dict = {}
-eval_metrics_dict = {}
-eval_metrics2_dict = {}
 task1_ewc = {}
-task1_ewc12 = {}
 task2_ewc = {}
-task2_ewc12 = {}
 
 k_fold = KFold(n_splits=splits, shuffle=True, random_state=42)
 
@@ -630,35 +809,6 @@ for i in range(0, epochs):
       train_metrics_dict["epoch_{}".format(i)].update({'loss':[]}) 
       train_metrics_dict["epoch_{}".format(i)].update({'val_loss':[]}) 
 
- 
-      train_metrics2_dict.update({"epoch_{}".format(i):{'acc':[]}})
-      train_metrics2_dict["epoch_{}".format(i)].update({'val_acc':[]})
-      train_metrics2_dict["epoch_{}".format(i)].update({'rec':[]})
-      train_metrics2_dict["epoch_{}".format(i)].update({'val_rec':[]})
-      train_metrics2_dict["epoch_{}".format(i)].update({'prec':[]}) 
-      train_metrics2_dict["epoch_{}".format(i)].update({'val_prec':[]}) 
-      train_metrics2_dict["epoch_{}".format(i)].update({'loss':[]}) 
-      train_metrics2_dict["epoch_{}".format(i)].update({'val_loss':[]}) 
-
-
-      eval_metrics_dict.update({"epoch_{}".format(i):{'acc':[]}})
-      eval_metrics_dict["epoch_{}".format(i)].update({'val_acc':[]})
-      eval_metrics_dict["epoch_{}".format(i)].update({'rec':[]})
-      eval_metrics_dict["epoch_{}".format(i)].update({'val_rec':[]})
-      eval_metrics_dict["epoch_{}".format(i)].update({'prec':[]})
-      eval_metrics_dict["epoch_{}".format(i)].update({'val_prec':[]})
-      eval_metrics_dict["epoch_{}".format(i)].update({'loss':[]}) 
-      eval_metrics_dict["epoch_{}".format(i)].update({'val_loss':[]}) 
-
-      eval_metrics2_dict.update({"epoch_{}".format(i):{'acc':[]}})
-      eval_metrics2_dict["epoch_{}".format(i)].update({'val_acc':[]})
-      eval_metrics2_dict["epoch_{}".format(i)].update({'rec':[]})
-      eval_metrics2_dict["epoch_{}".format(i)].update({'val_rec':[]})
-      eval_metrics2_dict["epoch_{}".format(i)].update({'prec':[]})
-      eval_metrics2_dict["epoch_{}".format(i)].update({'val_prec':[]})
-      eval_metrics2_dict["epoch_{}".format(i)].update({'loss':[]}) 
-      eval_metrics2_dict["epoch_{}".format(i)].update({'val_loss':[]})    
-      
       task1_ewc.update({"epoch_{}".format(i):{'acc':[]}})
       task1_ewc["epoch_{}".format(i)].update({'rec':[]})
       task1_ewc["epoch_{}".format(i)].update({'prec':[]})
@@ -669,17 +819,6 @@ for i in range(0, epochs):
       task2_ewc["epoch_{}".format(i)].update({'prec':[]})
       task2_ewc["epoch_{}".format(i)].update({'loss':[]})
 
-      task1_ewc12.update({"epoch_{}".format(i):{'acc':[]}})
-      task1_ewc12["epoch_{}".format(i)].update({'rec':[]})
-      task1_ewc12["epoch_{}".format(i)].update({'prec':[]})
-      task1_ewc12["epoch_{}".format(i)].update({'loss':[]})
-
-      task2_ewc12.update({"epoch_{}".format(i):{'acc':[]}})
-      task2_ewc12["epoch_{}".format(i)].update({'rec':[]})
-      task2_ewc12["epoch_{}".format(i)].update({'prec':[]})
-      task2_ewc12["epoch_{}".format(i)].update({'loss':[]})
-
-
 for k, (train, val) in enumerate(k_fold.split(X, Y)):
     print("[fold {0}]".format(k))
     
@@ -689,21 +828,13 @@ for k, (train, val) in enumerate(k_fold.split(X, Y)):
                    outputs=baseModel.output,
                    fisher_dict=fisher_dict2,
                    optpar_dict=optpar_dict2,
-                   ewc_lambda=0.0)
-    
-    # EWC12 = ModelEWC(inputs=baseModel.input,
-    #                outputs=baseModel.output,
-    #                fisher_dict=fisher_dict2,
-    #                optpar_dict=optpar_dict2,
-    #                ewc_lambda=0.7)
-    
+                   ewc_lambda=ewc_lambda)
+
     EWC.compile(optimizer="adam",
                 loss="binary_crossentropy",
                 metrics=metrics)
-
-    # EWC12.compile(optimizer="adam",
-    #             loss="binary_crossentropy",
-    #             metrics=metrics)
+    
+    EWC.load_weights("/content/drive/My Drive/Colab Notebooks/main_task2_only.h5")
     
     for i in range(0, epochs):
       H = EWC.fit(x=X[train], y=Y[train], epochs=1, batch_size=batchSize, validation_data=(X[val], Y[val]))
@@ -715,44 +846,89 @@ for k, (train, val) in enumerate(k_fold.split(X, Y)):
       train_metrics_dict["epoch_{}".format(i)]['val_prec'].append([H.history[i] for i in H.history.keys() if "val_prec" in i][0])
       train_metrics_dict["epoch_{}".format(i)]['rec'].append([H.history[i] for i in H.history.keys() if "rec" in i][0])
       train_metrics_dict["epoch_{}".format(i)]['val_rec'].append([H.history[i] for i in H.history.keys() if "val_rec" in i][0])
-      a,b,c,d = EWC.evaluate(data1, labels_1, batch_size=1)
+
+      a,b,c,d = EWC.evaluate(data1, labels_1, batch_size=batchSize)
       task1_ewc["epoch_{}".format(i)]['loss'].append(a)
       task1_ewc["epoch_{}".format(i)]['acc'].append(b)
       task1_ewc["epoch_{}".format(i)]['prec'].append(c)
       task1_ewc["epoch_{}".format(i)]['rec'].append(d)     
       
-      a,b,c,d = EWC.evaluate(data2, labels_2, batch_size=1)
+      a,b,c,d = EWC.evaluate(data2, labels_2, batch_size=batchSize)
       task2_ewc["epoch_{}".format(i)]['loss'].append(a)
       task2_ewc["epoch_{}".format(i)]['acc'].append(b)
       task2_ewc["epoch_{}".format(i)]['prec'].append(c)
-      task2_ewc["epoch_{}".format(i)]['rec'].append(c)      
-      
-      # H2 = EWC12.fit(x=X[train], y=Y[train], epochs=1, batch_size=batchSize, validation_data=(X[val], Y[val]))
-      # train_metrics2_dict["epoch_{}".format(i)]['loss'].append([H2.history[i] for i in H2.history.keys() if "loss" in i][0])
-      # train_metrics2_dict["epoch_{}".format(i)]['val_loss'].append([H2.history[i] for i in H2.history.keys() if "val_loss" in i][0])
-      # train_metrics2_dict["epoch_{}".format(i)]['acc'].append([H2.history[i] for i in H2.history.keys() if "acc" in i][0])
-      # train_metrics2_dict["epoch_{}".format(i)]['val_acc'].append([H2.history[i] for i in H2.history.keys() if "val_acc" in i][0])
-      # train_metrics2_dict["epoch_{}".format(i)]['prec'].append([H2.history[i] for i in H2.history.keys() if "prec" in i][0])
-      # train_metrics2_dict["epoch_{}".format(i)]['val_prec'].append([H2.history[i] for i in H2.history.keys() if "val_prec" in i][0])
-      # train_metrics2_dict["epoch_{}".format(i)]['rec'].append([H2.history[i] for i in H2.history.keys() if "rec" in i][0])
-      # train_metrics2_dict["epoch_{}".format(i)]['val_rec'].append([H2.history[i] for i in H2.history.keys() if "val_rec" in i][0])
-      
-      # a,b,c,d = EWC12.evaluate(data1, labels_1, batch_size=1)
-      # task1_ewc12["epoch_{}".format(i)]['loss'].append(a)
-      # task1_ewc12["epoch_{}".format(i)]['acc'].append(b)
-      # task1_ewc12["epoch_{}".format(i)]['prec'].append(c)
-      # task1_ewc12["epoch_{}".format(i)]['rec'].append(d)   
+      task2_ewc["epoch_{}".format(i)]['rec'].append(c)
 
-      # a,b,c,d = EWC12.evaluate(data2, labels_2, batch_size=1)
-      # task2_ewc12["epoch_{}".format(i)]['loss'].append(a)
-      # task2_ewc12["epoch_{}".format(i)]['acc'].append(b)
-      # task2_ewc12["epoch_{}".format(i)]['prec'].append(c)
-      # task2_ewc12["epoch_{}".format(i)]['rec'].append(d)
+m = 'rec'
+plot_training(epochs=20, metric=m, ref_dict=train_metrics_dict)
+plot_performance(epochs=20, metric=m, ref_dict1=task1_ewc, ref_dict2=task2_ewc)
+
+# ========================
+# save/load model weights
+# ========================
+
+# f = open("/content/drive/My Drive/Colab Notebooks/ewc_weights_task2.pkl", "wb")
+# pickle.dump(EWC.get_weights(), f)
+# f.close()
+
+# f = open("/content/drive/My Drive/Colab Notebooks/ewc_weights.pkl", "rb")
+# wght = pickle.load(f)
+# a = np.array(wght)
+# EWC.set_weights(a)
+
+# ====================================
+# save/load training and testing logs
+# ====================================
 
 '''
+splits = 5
+epochs = 20
+batchSize = 16
 train_metrics_dict: metrics of EWC model training (cross valid) on task 1 (ewc_lambda = 0)
-task1_ewc: metrics of EWC model testing (ewc_lambda = 0) on task 1 only
-task2_ewc: metrics of EWC model testing (ewc_lambda = 0) on task 2 only
+task1_ewc: metrics of task 1 EWC model testing (ewc_lambda = 0) on task 1 only
+task2_ewc: metrics of task 1 EWC model testing (ewc_lambda = 0) on task 2 only
+
+train_metrics_dict12_07: metrics of EWC model training. task 1 -> task 2(ewc_lambda = 0.7)
+task1_ewc12_07: metrics of task 1 EWC model testing (ewc_lambda = 0.7) on task 1 only
+task2_ewc12_07: metrics of task 1 EWC model testing (ewc_lambda = 0.7) on task 2 only
+
+main_train_metrics_dict12_10: metrics of EWC model training. task 1 -> task 2(ewc_lambda = 10)
+main_task1_ewc12_10: metrics of task 1 EWC model testing (ewc_lambda = 10) on task 1 only
+main_task2_ewc12_10: metrics of task 1 EWC model testing (ewc_lambda = 10) on task 2 only
+
+main_train_metrics_dict2: metrics of EWC model training on task 2 only (ewc_lambda = 0)
+main_task1_ewc_2: metrics of task 2 EWC model testing (ewc_lambda = 0) on task 1 only
+main_task2_ewc_2: metrics of task 2 EWC model testing (ewc_lambda = 0) on task 2 only
+
+main_train_metrics_dict21_07: metrics of EWC model training. task 2 -> task 1(ewc_lambda = 0.7)
+main_task1_ewc21_07: metrics of task 1 EWC model testing (ewc_lambda = 0.7) on task 1 only
+main_task2_ewc21_07: metrics of task 1 EWC model testing (ewc_lambda = 0.7) on task 2 only
+
+main_train_metrics_dict21_10: metrics of EWC model training. task 2 -> task 1(ewc_lambda = 10)
+main_task1_ewc21_10: metrics of task 1 EWC model testing (ewc_lambda = 10) on task 1 only
+main_task2_ewc21_10: metrics of task 1 EWC model testing (ewc_lambda = 10) on task 2 only
+
 '''
 
-plot_curves(epochs=20, metric="prec", ref_dict=train_metrics_dict)
+#  saving dicts
+# EWC.save("/content/drive/My Drive/Colab Notebooks/main_task2_only.h5")
+f1 = open("/content/drive/My Drive/Colab Notebooks/main_train_metrics_dict21_10.pkl", "wb")
+f2 = open("/content/drive/My Drive/Colab Notebooks/main_task1_ewc_21_10.pkl", "wb")
+f3 = open("/content/drive/My Drive/Colab Notebooks/main_task2_ewc_21_10.pkl", "wb")
+
+pickle.dump(train_metrics_dict, f1)
+pickle.dump(task1_ewc, f2)
+pickle.dump(task2_ewc, f3)
+
+f1.close()
+f2.close()
+f3.close()
+
+# # loading dicts
+# f1 = open("/content/drive/My Drive/Colab Notebooks/train_metrics_dict2.pkl", "rb")
+# f2 = open("/content/drive/My Drive/Colab Notebooks/task1_ewc2.pkl", "rb")
+# f3 = open("/content/drive/My Drive/Colab Notebooks/task2_ewc2.pkl", "rb")
+
+# train_metrics_dict = pickle.load(f1)
+# task1_ewc2 = pickle.load(f2)
+# task2_ewc2 = pickle.load(f3)
